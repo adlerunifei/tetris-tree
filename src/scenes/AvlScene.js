@@ -36,9 +36,20 @@ export default class AvlScene extends Phaser.Scene {
     this.score = 0;
     this.rotationNeeded = null;
     this.rotationNode = null;
+    this.usedNumbers = new Set(); // Para controlar números já usados
+  }
+
+  preload() {
+    // Carregar os sons
+    this.load.audio('collect', 'src/sounds/collect.wav');
+    this.load.audio('error', 'src/sounds/error.wav');
   }
 
   create() {
+    // Criar os sons
+    this.collectSound = this.sound.add('collect');
+    this.errorSound = this.sound.add('error');
+
     this.nodes = [];
     this.lines = [];
     this.plusButtons = [];
@@ -66,13 +77,22 @@ export default class AvlScene extends Phaser.Scene {
 
   dropRandomNumber() {
     if (this.fallingNumber) return;
-    const value = Phaser.Math.Between(10, 99);
+    
+    // Gerar número único
+    let value;
+    do {
+      value = Phaser.Math.Between(10, 99);
+    } while (this.usedNumbers.has(value));
+    
+    this.usedNumbers.add(value);
+    
     this.fallingNumber = this.add.text(390, 0, value, {
       fontSize: '24px',
       fill: '#fff',
       backgroundColor: '#f44336',
       padding: { x: 8, y: 5 }
     });
+    
     this.physics.add.existing(this.fallingNumber);
     this.fallingNumber.body.setVelocityY(100);
   }
@@ -86,8 +106,8 @@ export default class AvlScene extends Phaser.Scene {
   insertAt(node, side) {
     if (!this.fallingNumber) return;
     const value = parseInt(this.fallingNumber.text);
-    const offset = 120;
-
+    
+    // Validação da inserção
     let isValidInsertion = true;
     if (node.value !== null) {
       if (side === 'left' && value >= node.value) {
@@ -98,6 +118,8 @@ export default class AvlScene extends Phaser.Scene {
     }
 
     if (!isValidInsertion) {
+      this.errorSound.play();
+      
       this.tweens.add({
         targets: this.fallingNumber,
         x: 390,
@@ -123,10 +145,12 @@ export default class AvlScene extends Phaser.Scene {
       return;
     }
 
+    this.collectSound.play();
+
     if (node.value === null || side === 'self') {
       node.value = value;
     } else {
-      const newX = side === 'left' ? node.x - offset : node.x + offset;
+      const newX = side === 'left' ? node.x - this.getHorizontalSpacing(1) : node.x + this.getHorizontalSpacing(1);
       const newY = node.y + 100;
       const newNode = new TreeNode(value, newX, newY);
       if (side === 'left') node.left = newNode;
@@ -150,42 +174,94 @@ export default class AvlScene extends Phaser.Scene {
       pointsText.destroy();
     });
 
+    // Verificar balanceamento após inserção
+    this.checkAndRotate();
+  }
+
+  async checkAndRotate() {
     const [imbalancedNode, rotation] = this.checkTreeBalance(this.root);
+    
     if (rotation) {
       this.rotationNeeded = rotation;
       this.rotationNode = imbalancedNode;
-      this.promptRotation(rotation, imbalancedNode.value);
-    }
-
-    this.redrawTree();
-    if (!rotation) {
+      
+      // Aguardar a conclusão da rotação atual
+      await new Promise(resolve => {
+        this.promptRotation(rotation, imbalancedNode.value, resolve);
+      });
+      
+      // Após a rotação estar completa, verificar novamente
+      this.time.delayedCall(2200, () => {
+        this.checkAndRotate();
+      });
+    } else {
+      // Se não há mais rotações necessárias, continuar o jogo
+      this.redrawTree();
       this.dropRandomNumber();
     }
   }
 
-  checkTreeBalance(node) {
-    if (!node) return [null, null];
-    const rotation = detectRotation(node);
-    if (rotation) return [node, rotation];
-    const leftCheck = this.checkTreeBalance(node.left);
-    if (leftCheck[1]) return leftCheck;
-    return this.checkTreeBalance(node.right);
-  }
+  promptRotation(rotation, nodeValue, resolveCallback) {
+    const alertGroup = this.add.group();
 
-  promptRotation(rotation, nodeValue) {
-    const box = this.add.rectangle(400, 300, 500, 120, 0x333333).setOrigin(0.5);
-    const text = this.add.text(400, 280, `O nó ${nodeValue} está desbalanceado. Rotação ${rotation} necessária.`,
-      { fontSize: '18px', fill: '#fff' }).setOrigin(0.5);
-    const okBtn = this.add.text(400, 320, 'OK', {
+    const overlay = this.add.rectangle(0, 0, 1000, 700, 0x000000, 0.5)
+      .setOrigin(0)
+      .setDepth(100);
+    alertGroup.add(overlay);
+
+    const borderWidth = 4;
+    const boxWidth = 500;
+    const boxHeight = 160;
+    
+    const border = this.add.rectangle(400, 300, boxWidth + borderWidth, boxHeight + borderWidth, 0x2c3e50)
+      .setOrigin(0.5)
+      .setDepth(101);
+    alertGroup.add(border);
+    
+    const box = this.add.rectangle(400, 300, boxWidth, boxHeight, 0x34495e)
+      .setOrigin(0.5)
+      .setDepth(102);
+    box.setInteractive();
+    alertGroup.add(box);
+
+    const text = this.add.text(400, 270, 
+      `O nó ${nodeValue} está desbalanceado.\nRotação ${rotation} necessária.`, {
+      fontSize: '24px',
+      fill: '#ecf0f1',
+      align: 'center'
+    })
+    .setOrigin(0.5)
+    .setDepth(103);
+    alertGroup.add(text);
+
+    const okBtn = this.add.container(400, 340).setDepth(103);
+    const btnBg = this.add.rectangle(0, 0, 100, 40, 0x27ae60)
+      .setInteractive()
+      .on('pointerover', () => btnBg.setFillStyle(0x2ecc71))
+      .on('pointerout', () => btnBg.setFillStyle(0x27ae60));
+    
+    const btnText = this.add.text(0, 0, 'OK', {
       fontSize: '20px',
-      fill: '#fff',
-      backgroundColor: '#4caf50',
-      padding: { x: 20, y: 10 }
-    }).setOrigin(0.5).setInteractive();
+      fill: '#fff'
+    }).setOrigin(0.5);
 
-    okBtn.on('pointerdown', () => {
-      [box, text, okBtn].forEach(e => e.destroy());
+    okBtn.add([btnBg, btnText]);
+    alertGroup.add(okBtn);
+
+    btnBg.on('pointerdown', () => {
+      alertGroup.destroy(true);
       this.enableRotationButtons(rotation);
+      
+      // Aguardar a conclusão da rotação antes de resolver a promessa
+      const checkRotationComplete = () => {
+        if (!this.rotationNeeded) {
+          resolveCallback();
+        } else {
+          this.time.delayedCall(100, checkRotationComplete);
+        }
+      };
+      
+      this.time.delayedCall(100, checkRotationComplete);
     });
   }
 
@@ -219,8 +295,10 @@ export default class AvlScene extends Phaser.Scene {
 
   enableRotationButtons(correct) {
     Object.entries(this.rotationButtons).forEach(([label, btn]) => {
-      btn.setAlpha(1);
+      this.tweens.killTweensOf(btn);
+      
       if (label === correct) {
+        btn.setAlpha(1);
         this.tweens.add({
           targets: btn,
           alpha: 0.3,
@@ -228,6 +306,8 @@ export default class AvlScene extends Phaser.Scene {
           yoyo: true,
           repeat: -1
         });
+      } else {
+        btn.setAlpha(0.5);
       }
     });
   }
@@ -258,6 +338,11 @@ export default class AvlScene extends Phaser.Scene {
   drawTree(node) {
     if (!node) return;
 
+    const levelSpacing = 100; // Espaçamento vertical entre níveis
+    const currentLevel = this.getNodeLevel(node);
+    const horizontalSpacing = this.getHorizontalSpacing(currentLevel);
+
+    // Desenha o nó atual
     if (node.value !== null) {
       this.nodes.push(this.add.circle(node.x, node.y, 25, 0x4caf50));
       this.nodes.push(this.add.text(node.x - 10, node.y - 10, node.value, {
@@ -266,6 +351,7 @@ export default class AvlScene extends Phaser.Scene {
       }));
     }
 
+    // Botão '+' para nó raiz vazio
     if (node.value === null) {
       const plusRoot = this.add.text(node.x - 15, node.y - 15, '+', {
         fontSize: '28px',
@@ -277,19 +363,29 @@ export default class AvlScene extends Phaser.Scene {
       this.plusButtons.push(plusRoot);
     }
 
+    // Desenha conexões e subárvores
     if (node.left) {
+      node.left.x = node.x - horizontalSpacing;
+      node.left.y = node.y + levelSpacing;
       this.lines.push(this.add.line(0, 0, node.x, node.y, node.left.x, node.left.y, 0xffffff).setOrigin(0, 0));
       this.drawTree(node.left);
     }
 
     if (node.right) {
+      node.right.x = node.x + horizontalSpacing;
+      node.right.y = node.y + levelSpacing;
       this.lines.push(this.add.line(0, 0, node.x, node.y, node.right.x, node.right.y, 0xffffff).setOrigin(0, 0));
       this.drawTree(node.right);
     }
 
+    // Adiciona botões '+' para nós não vazios
     if (node.value !== null) {
+      const nextLevelSpacing = this.getHorizontalSpacing(currentLevel + 1);
+      
       if (!node.left) {
-        const plusL = this.add.text(node.x - 60, node.y + 60, '+', {
+        const leftX = node.x - nextLevelSpacing;
+        const leftY = node.y + levelSpacing;
+        const plusL = this.add.text(leftX - 15, leftY - 15, '+', {
           fontSize: '28px',
           fill: '#fff',
           backgroundColor: '#2196f3',
@@ -298,8 +394,11 @@ export default class AvlScene extends Phaser.Scene {
         plusL.on('pointerdown', () => this.insertAt(node, 'left'));
         this.plusButtons.push(plusL);
       }
+      
       if (!node.right) {
-        const plusR = this.add.text(node.x + 40, node.y + 60, '+', {
+        const rightX = node.x + nextLevelSpacing;
+        const rightY = node.y + levelSpacing;
+        const plusR = this.add.text(rightX - 15, rightY - 15, '+', {
           fontSize: '28px',
           fill: '#fff',
           backgroundColor: '#2196f3',
@@ -311,19 +410,80 @@ export default class AvlScene extends Phaser.Scene {
     }
   }
 
+  // Novo método para calcular o nível de um nó
+  getNodeLevel(node) {
+    let level = 1;
+    let current = this.root;
+    while (current && current !== node) {
+      if (node.value < current.value) {
+        current = current.left;
+      } else {
+        current = current.right;
+      }
+      level++;
+    }
+    return level;
+  }
+
+  // Ajuste no cálculo do espaçamento horizontal
+  getHorizontalSpacing(level) {
+    const baseSpacing = 200; // Aumentado de 160 para 200
+    const reductionFactor = 0.6; // Aumentado de 0.5 para 0.6 para redução mais gradual
+    return Math.max(60, baseSpacing * Math.pow(reductionFactor, level - 1));
+  }
+
   performRotation(type) {
     if (!this.rotationNode || !this.rotationNeeded) return;
     
+    Object.values(this.rotationButtons).forEach(btn => {
+      btn.setAlpha(0.5);
+      this.tweens.killTweensOf(btn);
+    });
+
     const node = this.rotationNode;
     let newRoot;
     
     console.log('Iniciando rotação:', type);
-    console.log('Nó atual:', node.value);
-    console.log('Estado atual da árvore:', this.root);
+    console.log('Estado inicial:', {
+      nodeValue: node.value,
+      nodeX: node.x,
+      nodeY: node.y,
+      rightChild: node.right ? node.right.value : null,
+      leftChild: node.left ? node.left.value : null
+    });
     
+    const getNewNodePosition = (baseNode, isLeft, level) => {
+      const spacing = this.getHorizontalSpacing(level);
+      const newPos = {
+        x: baseNode.x + (isLeft ? -spacing : spacing),
+        y: baseNode.y + 100
+      };
+      console.log('Calculando nova posição:', {
+        baseNodeValue: baseNode.value,
+        isLeft,
+        level,
+        spacing,
+        newX: newPos.x,
+        newY: newPos.y
+      });
+      return newPos;
+    };
+
     const animateNode = (node, targetX, targetY) => {
       return new Promise((resolve) => {
-        console.log('Animando nó:', node.value, 'para posição:', targetX, targetY);
+        if (!node) {
+          console.log('Tentativa de animar nó nulo');
+          resolve();
+          return;
+        }
+        
+        console.log('Iniciando animação:', {
+          nodeValue: node.value,
+          fromX: node.x,
+          fromY: node.y,
+          toX: targetX,
+          toY: targetY
+        });
         
         const nodeElements = [];
         this.nodes.forEach(n => {
@@ -336,7 +496,11 @@ export default class AvlScene extends Phaser.Scene {
           }
         });
         
-        console.log('Elementos encontrados para animação:', nodeElements.length);
+        console.log('Elementos encontrados para animação:', {
+          nodeValue: node.value,
+          count: nodeElements.length,
+          elements: nodeElements.map(e => e.type)
+        });
         
         if (nodeElements.length === 0) {
           console.warn('Nenhum elemento visual encontrado para o nó:', node.value);
@@ -348,10 +512,16 @@ export default class AvlScene extends Phaser.Scene {
           targets: nodeElements,
           x: targetX,
           y: targetY,
-          duration: 3000,
+          duration: 2000,
           ease: 'Power2',
           onComplete: () => {
-            console.log('Animação completa para nó:', node.value);
+            node.x = targetX;
+            node.y = targetY;
+            console.log('Animação completa:', {
+              nodeValue: node.value,
+              finalX: node.x,
+              finalY: node.y
+            });
             resolve();
           }
         });
@@ -359,206 +529,243 @@ export default class AvlScene extends Phaser.Scene {
     };
 
     const updatePositions = async () => {
-      switch (type) {
-        case 'LL': {
-          console.log('Executando rotação LL');
-          const B = node.left;
-          console.log('Nó B (filho esquerdo):', B.value);
-          
-          const BRight = B.right;
-          node.left = BRight;
-          B.right = node;
-          
-          const nodeOrigX = node.x;
-          const nodeOrigY = node.y;
-          
-          B.x = nodeOrigX;
-          B.y = nodeOrigY;
-          node.x = nodeOrigX + 120;
-          node.y = nodeOrigY + 100;
-          
-          if (BRight) {
-            BRight.x = node.x - 60;
-            BRight.y = node.y + 100;
+      try {
+        switch (type) {
+          case 'RR': {
+            console.log('Iniciando rotação RR');
+            const A = node;
+            const B = node.right;
+            
+            if (!B) {
+              console.error('Rotação RR impossível: nó direito não existe');
+              return;
+            }
+            
+            console.log('Estado antes da rotação:', {
+              A: { value: A.value, x: A.x, y: A.y },
+              B: { value: B.value, x: B.x, y: B.y },
+              BLeft: B.left ? { value: B.left.value, x: B.left.x, y: B.left.y } : null
+            });
+            
+            // 1. Salvar posição original de A
+            const originalX = A.x;
+            const originalY = A.y;
+            
+            // 2. Realizar a rotação estrutural
+            const BLeft = B.left;
+            A.right = BLeft;
+            B.left = A;
+            
+            // 3. Calcular novas posições
+            // B vai para a posição original de A
+            B.x = originalX;
+            B.y = originalY;
+            
+            // A vai para a esquerda de B
+            const newAPos = getNewNodePosition(B, true, 1);
+            A.x = newAPos.x;
+            A.y = newAPos.y;
+            
+            // Se B tinha um filho esquerdo, ele vai para a direita de A
+            if (BLeft) {
+                const newBLeftPos = getNewNodePosition(A, false, 2);
+                BLeft.x = newBLeftPos.x;
+                BLeft.y = newBLeftPos.y;
+            }
+            
+            // 4. Animar as mudanças
+            console.log('Iniciando animações');
+            
+            // Primeiro mover B para a posição da raiz
+            await animateNode(B, B.x, B.y);
+            
+            // Depois mover A e o antigo filho esquerdo de B (se existir)
+            await Promise.all([
+                animateNode(A, A.x, A.y),
+                BLeft ? animateNode(BLeft, BLeft.x, BLeft.y) : Promise.resolve()
+            ]);
+            
+            console.log('Estado final após rotação:', {
+                newRoot: B.value,
+                leftChild: A.value,
+                rightChild: B.right ? B.right.value : null
+            });
+            
+            newRoot = B;
+            break;
           }
-          
-          try {
+          case 'LL': {
+            console.log('Executando rotação LL');
+            const B = node.left;
+            if (!B) return;
+            
+            const BRight = B.right;
+            node.left = BRight;
+            B.right = node;
+            
+            const oldNodeX = node.x;
+            const oldNodeY = node.y;
+            
+            B.x = oldNodeX;
+            B.y = oldNodeY;
+            
+            const newNodePos = getNewNodePosition(B, false, 1);
+            node.x = newNodePos.x;
+            node.y = newNodePos.y;
+            
+            if (BRight) {
+              const BRightPos = getNewNodePosition(node, true, 2);
+              BRight.x = BRightPos.x;
+              BRight.y = BRightPos.y;
+            }
+            
             await animateNode(B, B.x, B.y);
             await animateNode(node, node.x, node.y);
-            
             if (BRight) {
               await animateNode(BRight, BRight.x, BRight.y);
             }
             
             newRoot = B;
-            
-            if (node.right) {
-              node.right.x = node.x + 60;
-              node.right.y = node.y + 100;
-              await animateNode(node.right, node.right.x, node.right.y);
-            }
-            
-            if (B.left) {
-              B.left.x = B.x - 60;
-              B.left.y = B.y + 100;
-              await animateNode(B.left, B.left.x, B.left.y);
-            }
-          } catch (error) {
-            console.error('Erro durante animação LL:', error);
+            break;
           }
-          break;
-        }
-        case 'RR': {
-          console.log('Executando rotação RR');
-          const B = node.right;
-          console.log('Nó B (filho direito):', B.value);
           
-          const BLeft = B.left;
-          node.right = BLeft;
-          B.left = node;
-          
-          const nodeOrigX = node.x;
-          const nodeOrigY = node.y;
-          
-          B.x = nodeOrigX;
-          B.y = nodeOrigY;
-          node.x = nodeOrigX - 120;
-          node.y = nodeOrigY + 100;
-          
-          try {
-            if (BLeft) {
-              await animateNode(BLeft, node.x + 120, node.y);
-            }
-            await animateNode(node, node.x, node.y);
-            await animateNode(B, B.x, B.y);
+          case 'RL': {
+            console.log('Executando rotação RL');
+            const B = node.right;
+            if (!B || !B.left) return;
             
-            newRoot = B;
-          } catch (error) {
-            console.error('Erro durante animação RR:', error);
-          }
-          break;
-        }
-        case 'LR': {
-          console.log('Executando rotação LR');
-          const B = node.left;
-          const C = B.right;
-          console.log('Nó B (filho esquerdo):', B.value);
-          console.log('Nó C (filho direito de B):', C.value);
-          
-          const CLeft = C.left;
-          const CRight = C.right;
-          
-          B.right = CLeft;
-          node.left = CRight;
-          C.left = B;
-          C.right = node;
-          
-          const nodeOrigX = node.x;
-          const nodeOrigY = node.y;
-          
-          C.x = nodeOrigX;
-          C.y = nodeOrigY;
-          B.x = nodeOrigX - 120;
-          B.y = nodeOrigY + 100;
-          node.x = nodeOrigX + 120;
-          node.y = nodeOrigY + 100;
-          
-          try {
-            if (CLeft) await animateNode(CLeft, B.x + 60, B.y);
-            if (CRight) await animateNode(CRight, node.x - 60, node.y);
-            await animateNode(B, B.x, B.y);
-            await animateNode(node, node.x, node.y);
+            const C = B.left;
+            const CLeft = C.left;
+            const CRight = C.right;
+            
+            node.right = CLeft;
+            B.left = CRight;
+            C.left = node;
+            C.right = B;
+            
+            const oldNodeX = node.x;
+            const oldNodeY = node.y;
+            
+            C.x = oldNodeX;
+            C.y = oldNodeY;
+            
+            const leftPos = getNewNodePosition(C, true, 1);
+            const rightPos = getNewNodePosition(C, false, 1);
+            
+            node.x = leftPos.x;
+            node.y = leftPos.y;
+            B.x = rightPos.x;
+            B.y = rightPos.y;
+            
+            if (CLeft) {
+              const CLeftPos = getNewNodePosition(node, false, 2);
+              CLeft.x = CLeftPos.x;
+              CLeft.y = CLeftPos.y;
+            }
+            if (CRight) {
+              const CRightPos = getNewNodePosition(B, true, 2);
+              CRight.x = CRightPos.x;
+              CRight.y = CRightPos.y;
+            }
+            
             await animateNode(C, C.x, C.y);
-            
-            newRoot = C;
-          } catch (error) {
-            console.error('Erro durante animação LR:', error);
-          }
-          break;
-        }
-        case 'RL': {
-          console.log('Executando rotação RL');
-          const B = node.right;
-          const C = B.left;
-          console.log('Nó B (filho direito):', B.value);
-          console.log('Nó C (filho esquerdo de B):', C.value);
-          
-          const CLeft = C.left;
-          const CRight = C.right;
-          
-          node.right = CLeft;
-          B.left = CRight;
-          C.left = node;
-          C.right = B;
-          
-          const nodeOrigX = node.x;
-          const nodeOrigY = node.y;
-          
-          C.x = nodeOrigX;
-          C.y = nodeOrigY;
-          node.x = nodeOrigX - 120;
-          node.y = nodeOrigY + 100;
-          B.x = nodeOrigX + 120;
-          B.y = nodeOrigY + 100;
-          
-          if (CLeft) {
-            CLeft.x = node.x + 60;
-            CLeft.y = node.y + 100;
-          }
-          if (CRight) {
-            CRight.x = B.x - 60;
-            CRight.y = B.y + 100;
-          }
-          
-          try {
-            await animateNode(C, C.x, C.y);
-            
             await Promise.all([
               animateNode(node, node.x, node.y),
               animateNode(B, B.x, B.y)
             ]);
-            
-            if (CLeft) {
-              await animateNode(CLeft, CLeft.x, CLeft.y);
-            }
-            if (CRight) {
-              await animateNode(CRight, CRight.x, CRight.y);
-            }
+            if (CLeft) await animateNode(CLeft, CLeft.x, CLeft.y);
+            if (CRight) await animateNode(CRight, CRight.x, CRight.y);
             
             newRoot = C;
-            
-            if (node.left) {
-              node.left.x = node.x - 60;
-              node.left.y = node.y + 100;
-              await animateNode(node.left, node.left.x, node.left.y);
-            }
-            if (B.right) {
-              B.right.x = B.x + 60;
-              B.right.y = B.y + 100;
-              await animateNode(B.right, B.right.x, B.right.y);
-            }
-          } catch (error) {
-            console.error('Erro durante animação RL:', error);
+            break;
           }
-          break;
+          
+          case 'LR': {
+            console.log('Executando rotação LR');
+            const B = node.left;
+            if (!B || !B.right) return;
+            
+            const C = B.right;
+            const CLeft = C.left;
+            const CRight = C.right;
+            
+            B.right = CLeft;
+            node.left = CRight;
+            C.left = B;
+            C.right = node;
+            
+            const oldNodeX = node.x;
+            const oldNodeY = node.y;
+            
+            C.x = oldNodeX;
+            C.y = oldNodeY;
+            
+            const leftPos = getNewNodePosition(C, true, 1);
+            const rightPos = getNewNodePosition(C, false, 1);
+            
+            B.x = leftPos.x;
+            B.y = leftPos.y;
+            node.x = rightPos.x;
+            node.y = rightPos.y;
+            
+            if (CLeft) {
+              const BRightPos = getNewNodePosition(B, false, 2);
+              CLeft.x = BRightPos.x;
+              CLeft.y = BRightPos.y;
+            }
+            if (CRight) {
+              const ALeftPos = getNewNodePosition(node, true, 2);
+              CRight.x = ALeftPos.x;
+              CRight.y = ALeftPos.y;
+            }
+            
+            await animateNode(C, C.x, C.y);
+            await Promise.all([
+              animateNode(B, B.x, B.y),
+              animateNode(node, node.x, node.y)
+            ]);
+            if (CLeft) await animateNode(CLeft, CLeft.x, CLeft.y);
+            if (CRight) await animateNode(CRight, CRight.x, CRight.y);
+            
+            newRoot = C;
+            break;
+          }
         }
-      }
-      
-      if (node === this.root) {
-        console.log('Atualizando raiz da árvore para:', newRoot.value);
-        this.root = newRoot;
-      }
-      
-      this.rotationNeeded = null;
-      this.rotationNode = null;
-      
-      this.time.delayedCall(3100, () => {
-        console.log('Redesenhando árvore após rotação');
+        
+        if (node === this.root) {
+          console.log('Atualizando raiz da árvore:', {
+            oldRoot: node.value,
+            newRoot: newRoot.value
+          });
+          this.root = newRoot;
+        }
+        
+        this.rotationNeeded = null;
+        this.rotationNode = null;
+        
+        this.time.delayedCall(2100, () => {
+          console.log('Iniciando redesenho final da árvore');
+          this.redrawTree();
+          this.dropRandomNumber();
+        });
+      } catch (error) {
+        console.error('Erro durante rotação:', error);
+        console.error('Stack:', error.stack);
+        this.rotationNeeded = null;
+        this.rotationNode = null;
         this.redrawTree();
-        this.dropRandomNumber();
-      });
+      }
     };
 
     updatePositions();
+  }
+
+  checkTreeBalance(node) {
+    if (!node) return [null, null];
+    const rotation = detectRotation(node);
+    if (rotation) return [node, rotation];
+    const leftCheck = this.checkTreeBalance(node.left);
+    if (leftCheck[1]) return leftCheck;
+    return this.checkTreeBalance(node.right);
   }
 }
